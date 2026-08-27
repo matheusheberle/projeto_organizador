@@ -16,6 +16,7 @@ Aplicação desktop em Python com interface gráfica (Tkinter) para organizaçã
   - Hash MD5 completo para confirmação de duplicatas idênticas.
 - **Opções Flexíveis de Organização:**
   - Organização por Ano e Mês (`YYYY/MM - NomeDoMes/`).
+  - Sugestão automática da pasta de destino a partir da pasta de origem.
   - Separação opcional em subpastas `Fotos/` e `Videos/`.
   - Padronização de nomes (`IMG_YYYYMMDD_HHMMSS` / `VID_YYYYMMDD_HHMMSS`).
   - Modos de operação: **Copiar** ou **Mover**.

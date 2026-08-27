@@ -16,3 +16,9 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 - **Deduplicação Binária em 3 Camadas:** Verificação por tamanho exato, hash parcial (64 KB) e hash completo MD5.
 - **Ações para Duplicatas:** Opções de ignorar, isolar na pasta `_Duplicatas` ou exportar para `duplicatas_encontradas.txt`.
 - **Interface Gráfica Tkinter:** Aba de execução com barra de progresso, cálculo de velocidade, estimativa de tempo (ETA) e aba dedicada para relatório "Antes & Depois".
+
+## [1.1.0] - 2026-08-27
+
+### Adicionado
+- **Destino sugerido:** ao informar a pasta de origem, a aplicação sugere uma pasta vizinha com o sufixo `_Organizado`.
+- A sugestão é preservada enquanto o usuário não definir um destino manualmente.

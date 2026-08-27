@@ -19,6 +19,8 @@ class App(tk.Tk):
 
         self.pasta_origem = tk.StringVar()
         self.pasta_destino = tk.StringVar()
+        self._destino_sugerido = ""
+        self.pasta_origem.trace_add("write", self._atualizar_sugestao_destino)
         self.organizar_por_mes = tk.BooleanVar(value=True)
         self.separar_por_tipo = tk.BooleanVar(value=False)
         self.renomear_arquivos = tk.BooleanVar(value=False)
@@ -185,10 +187,25 @@ class App(tk.Tk):
         if caminho:
             self.pasta_origem.set(caminho)
 
+    def _atualizar_sugestao_destino(self, *_args):
+        origem = self.pasta_origem.get().strip()
+        destino_atual = self.pasta_destino.get().strip()
+        if not origem or (destino_atual and destino_atual != self._destino_sugerido):
+            return
+
+        origem_normalizada = os.path.normpath(origem)
+        nome_origem = os.path.basename(origem_normalizada)
+        pasta_pai = os.path.dirname(origem_normalizada)
+        if nome_origem and pasta_pai:
+            sugestao = os.path.join(pasta_pai, f"{nome_origem}_Organizado")
+            self._destino_sugerido = sugestao
+            self.pasta_destino.set(sugestao)
+
     def _escolher_destino(self):
         caminho = filedialog.askdirectory(title="Escolha a pasta de destino")
         if caminho:
             self.pasta_destino.set(caminho)
+            self._destino_sugerido = ""
 
     def _log(self, mensagem):
         def atualizar():
