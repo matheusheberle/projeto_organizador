@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+env/
+
+# VS Code
+.vscode/
+
+# Logs e Saídas de Testes
+*.log
+relatorio_organizacao.txt
+duplicatas_encontradas.txt
+_Duplicatas/
+
+# PyInstaller / Build
+dist/
+build/
+*.spec
