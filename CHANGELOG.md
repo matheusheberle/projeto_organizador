@@ -4,6 +4,17 @@ Todas as mudanças notáveis deste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/),
 e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [1.1.0] - 2026-08-27
+
+### Adicionado
+- **Modo Simulação:** previsão completa sem criar pastas, copiar, mover ou salvar relatórios automaticamente.
+- **Plano de Organização:** exportação manual das operações previstas em CSV ou TXT.
+- **Análise de Conflitos:** identificação de colisões de nomes e reserva de nomes no modo simulação.
+- **Filtro de Atividade:** filtros para operações, duplicatas, conflitos e erros.
+- **Estimativa de Espaço:** cálculo do espaço necessário no destino antes da execução.
+- **Sugestão de Destino:** criação automática de uma sugestão de pasta irmã da origem.
+- **Interrupção Aprimorada:** indicação visual dos estados "Parando..." e "Interrompido.".
+
 ## [1.0.0] - 2026-08-27
 
 ### Adicionado
