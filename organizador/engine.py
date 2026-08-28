@@ -105,11 +105,17 @@ def gerar_texto_relatorio(stats):
         item = stats["distribuicao_anos"][ano]
         dist_linhas.append(f"  {ano}: {item['qtd']} arquivos ({formatar_bytes(item['bytes'])})")
     dist_txt = "\n".join(dist_linhas) if dist_linhas else "  Nenhum dado distribuído."
+    simulacao = stats.get("simulacao", False)
+    titulo_status = "PREVISÃO — NENHUMA ALTERAÇÃO FOI FEITA" if simulacao else "EXECUÇÃO REAL"
+    rotulo_organizados = "Arquivos que seriam organizados" if simulacao else "Arquivos organizados com sucesso"
+    rotulo_espaco = "Espaço previsto no destino" if simulacao else "Espaço ocupado no destino"
+    rotulo_distribuicao = "DISTRIBUIÇÃO PREVISTA POR ANO" if simulacao else "DISTRIBUIÇÃO POR ANO NO DESTINO"
 
     return f"""======================================================================
 RELATÓRIO DE ORGANIZAÇÃO — ANTES & DEPOIS
 Data da Execução: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
 Tempo Total: {formatar_segundos(stats.get('tempo_total', 0))} | Modo: {stats.get('modo', '').upper()}
+STATUS: {titulo_status}
 ======================================================================
 
 [1] COMPARAÇÃO ANTES vs. DEPOIS
@@ -117,17 +123,19 @@ Tempo Total: {formatar_segundos(stats.get('tempo_total', 0))} | Modo: {stats.get
 Métrica                 | Antes (Origem)       | Depois (Destino)
 ----------------------------------------------------------------------
 Total de Arquivos       | {stats.get('origem_total_arq', 0):<20} | {stats.get('organizados', 0)}
-Espaço Ocupado          | {formatar_bytes(stats.get('origem_total_bytes', 0)):<20} | {formatar_bytes(stats.get('bytes_organizados', 0))}
+{rotulo_espaco:<24} | {formatar_bytes(stats.get('origem_total_bytes', 0)):<20} | {formatar_bytes(stats.get('espaco_destino_necessario', 0))}
 Espaço Economizado      | —                    | {formatar_bytes(stats.get('bytes_economizados', 0))} (duplicatas)
 Pastas Mapeadas         | {stats.get('origem_qtd_pastas', 0):<20} | {len(stats.get('distribuicao_anos', {}))} anos organizados
+Conflitos de destino    | —                    | {len(stats.get('conflitos', []))}
 
 [2] STATUS DO PROCESSAMENTO
 ----------------------------------------------------------------------
-* Arquivos organizados com sucesso: {stats.get('organizados', 0)}
+* {rotulo_organizados}: {stats.get('organizados', 0)}
   - Fotos: {stats.get('fotos', 0)}
   - Vídeos: {stats.get('videos', 0)}
 * Duplicatas identificadas: {stats.get('duplicados', 0)} (Ação: {stats.get('acao_duplicata', '')})
 * Erros encontrados: {stats.get('erros', 0)}
+* Espaço estimado necessário: {formatar_bytes(stats.get('espaco_destino_necessario', 0))}
 
 [3] PRECISÃO E ORIGEM DA DATA DETECTADA
 ----------------------------------------------------------------------
@@ -136,7 +144,7 @@ Pastas Mapeadas         | {stats.get('origem_qtd_pastas', 0):<20} | {len(stats.g
 * Nome do Arquivo (Regex / WhatsApp / etc.): {origem_regex} ({p_reg:.1f}%)
 * Data do Sistema de Arquivos (Fallback SO): {origem_fs} ({p_fs:.1f}%)
 
-[4] DISTRIBUIÇÃO POR ANO NO DESTINO
+[4] {rotulo_distribuicao}
 ----------------------------------------------------------------------
 {dist_txt}
 ======================================================================
@@ -145,8 +153,12 @@ Pastas Mapeadas         | {stats.get('origem_qtd_pastas', 0):<20} | {len(stats.g
 
 def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separar_por_tipo,
                           renomear_arquivos, modo, verificar_duplicatas, acao_duplicata,
-                          callback_log, callback_progresso, callback_concluido, deve_parar):
-    os.makedirs(pasta_destino, exist_ok=True)
+                          callback_log, callback_progresso, callback_concluido, deve_parar,
+                          simulacao=False):
+    if simulacao:
+        callback_log("MODO SIMULAÇÃO: nenhum arquivo ou relatório será alterado.")
+    else:
+        os.makedirs(pasta_destino, exist_ok=True)
     callback_log("Mapeando arquivos e estrutura da pasta de origem...")
     total_esperado, origem_bytes, origem_pastas = analisar_pasta_origem(pasta_origem, pasta_destino)
 
@@ -159,6 +171,7 @@ def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separa
     videos = 0
     bytes_organizados = 0
     bytes_economizados = 0
+    espaco_destino_necessario = 0
 
     fontes_data = {
         "EXIF": 0, "Metadados de Vídeo": 0,
@@ -166,9 +179,12 @@ def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separa
     }
     distribuicao_anos = {}
     registro_duplicatas = []
+    destinos_simulados = set()
+    plano_operacoes = []
+    conflitos = []
 
     pasta_duplicatas = os.path.join(pasta_destino, "_Duplicatas")
-    if verificar_duplicatas and acao_duplicata == "Isolar na pasta '_Duplicatas'":
+    if verificar_duplicatas and acao_duplicata == "Isolar na pasta '_Duplicatas'" and not simulacao:
         os.makedirs(pasta_duplicatas, exist_ok=True)
 
     indice_vistos = {}
@@ -213,22 +229,59 @@ def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separa
                         dest_dup = os.path.join(pasta_duplicatas, nome_arquivo)
                         cnt = 1
                         base_d, ext_d = os.path.splitext(nome_arquivo)
-                        while os.path.exists(dest_dup):
+                        while os.path.exists(dest_dup) or dest_dup in destinos_simulados:
                             dest_dup = os.path.join(pasta_duplicatas, f"{base_d}_{cnt}{ext_d}")
                             cnt += 1
                         try:
-                            if modo == "mover":
+                            if simulacao:
+                                callback_log(f"[SIMULAÇÃO: duplicado -> _Duplicatas] {caminho_relativo}")
+                                destinos_simulados.add(dest_dup)
+                                espaco_destino_necessario += tamanho_atual
+                                plano_operacoes.append({
+                                    "acao": f"{modo} duplicado",
+                                    "origem": caminho_completo,
+                                    "destino": dest_dup,
+                                    "status": "simulado"
+                                })
+                            elif modo == "mover":
                                 shutil.move(caminho_completo, dest_dup)
+                                espaco_destino_necessario += tamanho_atual
+                                plano_operacoes.append({
+                                    "acao": "mover duplicado",
+                                    "origem": caminho_completo,
+                                    "destino": dest_dup,
+                                    "status": "executado"
+                                })
+                                callback_log(f"[duplicado -> _Duplicatas] {caminho_relativo}")
                             else:
                                 shutil.copy2(caminho_completo, dest_dup)
-                            callback_log(f"[duplicado -> _Duplicatas] {caminho_relativo}")
+                                espaco_destino_necessario += tamanho_atual
+                                plano_operacoes.append({
+                                    "acao": "copiar duplicado",
+                                    "origem": caminho_completo,
+                                    "destino": dest_dup,
+                                    "status": "executado"
+                                })
+                                callback_log(f"[duplicado -> _Duplicatas] {caminho_relativo}")
                         except Exception as e:
                             callback_log(f"Erro ao isolar duplicata {nome_arquivo}: {e}")
 
                     elif acao_duplicata == "Registrar em 'duplicatas.txt'":
                         registro_duplicatas.append(f"ORIGEM: {caminho_completo}\nIDÊNTICO A: {caminho_existente}\n" + "-"*40)
+                        plano_operacoes.append({
+                            "acao": "registrar duplicado",
+                            "origem": caminho_completo,
+                            "destino": os.path.join(pasta_destino, "duplicatas_encontradas.txt"),
+                            "status": "simulado" if simulacao else "executado"
+                        })
                         callback_log(f"[duplicado registrado] {caminho_relativo}")
                     else:
+                        plano_operacoes.append({
+                            "acao": "ignorar duplicado",
+                            "origem": caminho_completo,
+                            "destino": caminho_existente,
+                            "status": "simulado" if simulacao else "executado"
+                        })
                         callback_log(f"[duplicado ignorado] {caminho_relativo}")
                     continue
 
@@ -255,16 +308,42 @@ def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separa
             else:
                 nome_base, _ = os.path.splitext(nome_arquivo)
 
-            os.makedirs(pasta_final, exist_ok=True)
+            if not simulacao:
+                os.makedirs(pasta_final, exist_ok=True)
             destino_final = os.path.join(pasta_final, f"{nome_base}{extensao_lower}")
+            destino_inicial = destino_final
 
             contador = 1
-            while os.path.exists(destino_final):
+            while os.path.exists(destino_final) or destino_final in destinos_simulados:
                 destino_final = os.path.join(pasta_final, f"{nome_base}_{contador}{extensao_lower}")
                 contador += 1
 
+            caminho_relativo = os.path.relpath(caminho_completo, pasta_origem)
+            conflito_destino = destino_final != destino_inicial
+            if conflito_destino:
+                conflito = {
+                    "origem": caminho_completo,
+                    "destino_original": destino_inicial,
+                    "destino_final": destino_final,
+                    "motivo": "Nome já existente"
+                }
+                conflitos.append(conflito)
+                callback_log(
+                    f"[CONFLITO] {os.path.basename(destino_inicial)} já existe; "
+                    f"será usado {os.path.basename(destino_final)}"
+                )
+            plano_operacoes.append({
+                "acao": modo,
+                "origem": caminho_completo,
+                "destino": destino_final,
+                "status": "simulado" if simulacao else "executado",
+                "conflito": "sim" if conflito_destino else "não"
+            })
             try:
-                if modo == "mover":
+                if simulacao:
+                    callback_log(f"[SIMULAÇÃO: {modo}] {rotulo_pasta} <- {caminho_relativo}")
+                    destinos_simulados.add(destino_final)
+                elif modo == "mover":
                     shutil.move(caminho_completo, destino_final)
                 else:
                     shutil.copy2(caminho_completo, destino_final)
@@ -277,6 +356,7 @@ def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separa
 
                 if tamanho_atual > 0:
                     bytes_organizados += tamanho_atual
+                    espaco_destino_necessario += tamanho_atual
 
                 if ano not in distribuicao_anos:
                     distribuicao_anos[ano] = {"qtd": 0, "bytes": 0}
@@ -285,17 +365,16 @@ def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separa
                     distribuicao_anos[ano]["bytes"] += tamanho_atual
 
                 if verificar_duplicatas:
-                    tam_final = obter_tamanho(destino_final)
+                    tam_final = tamanho_atual if simulacao else obter_tamanho(destino_final)
                     if tam_final > 0:
                         if tam_final not in indice_vistos:
                             indice_vistos[tam_final] = []
                         indice_vistos[tam_final].append({
-                            "caminho": destino_final,
+                            "caminho": caminho_completo if simulacao else destino_final,
                             "hash_parcial": None,
                             "hash_completo": None
                         })
 
-                caminho_relativo = os.path.relpath(caminho_completo, pasta_origem)
                 nome_salvo = os.path.basename(destino_final)
                 callback_log(f"[{rotulo_pasta}] {caminho_relativo} -> {nome_salvo} ({origem_data})")
             except Exception as e:
@@ -316,24 +395,32 @@ def processar_organizacao(pasta_origem, pasta_destino, organizar_por_mes, separa
         "videos": videos,
         "bytes_organizados": bytes_organizados,
         "bytes_economizados": bytes_economizados,
+        "espaco_destino_necessario": espaco_destino_necessario,
         "fontes_data": fontes_data,
         "distribuicao_anos": distribuicao_anos,
+        "plano_operacoes": plano_operacoes,
+        "conflitos": conflitos,
         "tempo_total": tempo_total,
-        "modo": modo,
+        "modo": f"{modo} (simulação)" if simulacao else modo,
+        "simulacao": simulacao,
+        "separar_por_tipo": separar_por_tipo,
         "pasta_destino": pasta_destino
     }
 
     relatorio_texto = gerar_texto_relatorio(stats)
 
     try:
-        caminho_relatorio = os.path.join(pasta_destino, "relatorio_organizacao.txt")
-        with open(caminho_relatorio, "w", encoding="utf-8") as f:
-            f.write(relatorio_texto)
-        callback_log(f"\nRelatório geral salvo em: {caminho_relatorio}")
+        if simulacao:
+            callback_log("\nRelatório não salvo: execução em modo simulação.")
+        else:
+            caminho_relatorio = os.path.join(pasta_destino, "relatorio_organizacao.txt")
+            with open(caminho_relatorio, "w", encoding="utf-8") as f:
+                f.write(relatorio_texto)
+            callback_log(f"\nRelatório geral salvo em: {caminho_relatorio}")
     except Exception as e:
         callback_log(f"\nErro ao salvar relatório geral: {e}")
 
-    if registro_duplicatas:
+    if not simulacao and registro_duplicatas:
         try:
             caminho_txt_dup = os.path.join(pasta_destino, "duplicatas_encontradas.txt")
             with open(caminho_txt_dup, "w", encoding="utf-8") as f:

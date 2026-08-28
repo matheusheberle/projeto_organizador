@@ -21,6 +21,10 @@ Aplicação desktop em Python com interface gráfica (Tkinter) para organizaçã
   - Modos de operação: **Copiar** ou **Mover**.
 - **Gestão de Duplicatas:** Ignorar, isolar em pasta dedicada (`_Duplicatas/`) ou exportar para log (`duplicatas_encontradas.txt`).
 - **Auditoria "Antes & Depois":** Relatório visual completo com métricas de espaço economizado, fontes de metadados e distribuição temporal.
+- **Modo Simulação:** visualize operações, conflitos e espaço previsto sem alterar os arquivos.
+- **Plano Exportável:** salve manualmente a previsão em CSV ou TXT.
+- **Filtro de Atividade:** filtre operações, duplicatas, conflitos e erros no log.
+- **Sugestão de Destino:** gere uma pasta destino sugerida a partir da origem.
 
 ---
 

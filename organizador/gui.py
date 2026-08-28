@@ -1,9 +1,11 @@
 """Interface Gráfica com Tkinter e visualização de Antes e Depois."""
+import csv
 import os
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+from organizador import __version__
 from organizador.utils import formatar_segundos, formatar_bytes
 from organizador.metadata import HACHOIR_DISPONIVEL, HEIF_DISPONIVEL
 from organizador.engine import processar_organizacao, gerar_texto_relatorio
@@ -13,7 +15,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Organizador de Fotos e Vídeos")
+        self.title(f"Organizador de Fotos e Vídeos v{__version__}")
         self.geometry("740x720")
         self.resizable(True, True)
 
@@ -28,6 +30,9 @@ class App(tk.Tk):
 
         self._parar_flag = False
         self._thread_em_execucao = None
+        self._historico_log = []
+        self._stats_ultimo_relatorio = None
+        self.filtro_log = tk.StringVar(value="Todos")
 
         self._montar_interface()
 
@@ -57,6 +62,7 @@ class App(tk.Tk):
         frame_destino.pack(fill="x", **padding)
         tk.Label(frame_destino, text="Pasta de destino:", width=16, anchor="w").pack(side="left")
         tk.Entry(frame_destino, textvariable=self.pasta_destino).pack(side="left", fill="x", expand=True, padx=5)
+        tk.Button(frame_destino, text="Sugerir", command=self._sugerir_destino).pack(side="left", padx=(0, 5))
         tk.Button(frame_destino, text="Escolher...", command=self._escolher_destino).pack(side="left")
 
         frame_opcoes = tk.LabelFrame(self.aba_execucao, text="Opções de Organização")
@@ -126,8 +132,16 @@ class App(tk.Tk):
         )
         self.botao_iniciar.pack(side="left", padx=(0, 8))
 
+        self.botao_simular = tk.Button(
+            frame_botoes, text="Simular Organização", command=lambda: self._iniciar(simulacao=True),
+            bg="#1565c0", fg="white", font=("Segoe UI", 10, "bold")
+        )
+        self.botao_simular.pack(side="left", padx=(0, 8))
+
         self.botao_parar = tk.Button(
-            frame_botoes, text="Parar", command=self._parar, state="disabled"
+            frame_botoes, text="Parar", command=self._parar, state="disabled",
+            bg="#c62828", fg="white", activebackground="#8e0000",
+            activeforeground="white", font=("Segoe UI", 10, "bold")
         )
         self.botao_parar.pack(side="left")
 
@@ -140,6 +154,19 @@ class App(tk.Tk):
         frame_log = tk.LabelFrame(self.aba_execucao, text="Atividade")
         frame_log.pack(fill="both", expand=True, **padding)
 
+        frame_filtro = tk.Frame(frame_log)
+        frame_filtro.pack(fill="x", padx=5, pady=(5, 2))
+        tk.Label(frame_filtro, text="Exibir:").pack(side="left")
+        self.combo_filtro_log = ttk.Combobox(
+            frame_filtro,
+            textvariable=self.filtro_log,
+            values=["Todos", "Operações", "Duplicatas", "Conflitos", "Erros"],
+            state="readonly",
+            width=16
+        )
+        self.combo_filtro_log.pack(side="left", padx=5)
+        self.combo_filtro_log.bind("<<ComboboxSelected>>", self._atualizar_filtro_log)
+
         self.caixa_log = tk.Text(frame_log, wrap="word", state="disabled", height=10)
         self.caixa_log.pack(side="left", fill="both", expand=True)
 
@@ -148,6 +175,21 @@ class App(tk.Tk):
         self.caixa_log.configure(yscrollcommand=scrollbar.set)
 
     def _montar_aba_relatorio(self):
+        frame_acoes = tk.Frame(self.aba_relatorio)
+        frame_acoes.pack(fill="x", padx=10, pady=(5, 0))
+        self.label_status_relatorio = tk.Label(
+            frame_acoes, text="Nenhuma execução concluída.", anchor="w",
+            font=("Segoe UI", 10, "bold")
+        )
+        self.label_status_relatorio.pack(side="left", fill="x", expand=True)
+        self.botao_exportar_plano = tk.Button(
+            frame_acoes, text="Exportar Plano", command=self._exportar_plano,
+            state="disabled", bg="#ef6c00", fg="white",
+            activebackground="#b53d00", activeforeground="white",
+            font=("Segoe UI", 9, "bold")
+        )
+        self.botao_exportar_plano.pack(side="right")
+
         frame_tabela = tk.LabelFrame(self.aba_relatorio, text="Comparativo Antes & Depois")
         frame_tabela.pack(fill="x", padx=10, pady=5)
 
@@ -184,6 +226,19 @@ class App(tk.Tk):
         caminho = filedialog.askdirectory(title="Escolha a pasta de origem")
         if caminho:
             self.pasta_origem.set(caminho)
+            if not self.pasta_destino.get().strip():
+                self._sugerir_destino()
+
+    def _sugerir_destino(self):
+        origem = self.pasta_origem.get().strip()
+        if not origem or not os.path.isdir(origem):
+            messagebox.showinfo("Sugestão de destino", "Escolha uma pasta de origem válida primeiro.")
+            return
+
+        pasta_origem = os.path.abspath(origem)
+        nome_origem = os.path.basename(os.path.normpath(pasta_origem))
+        destino = os.path.join(os.path.dirname(pasta_origem), f"{nome_origem}_Organizado")
+        self.pasta_destino.set(destino)
 
     def _escolher_destino(self):
         caminho = filedialog.askdirectory(title="Escolha a pasta de destino")
@@ -191,12 +246,35 @@ class App(tk.Tk):
             self.pasta_destino.set(caminho)
 
     def _log(self, mensagem):
+        self._historico_log.append(mensagem)
+        self.after(0, self._atualizar_caixa_log)
+
+    def _atualizar_caixa_log(self, _evento=None):
+        filtro = self.filtro_log.get()
+
+        def deve_exibir(mensagem):
+            if filtro == "Todos":
+                return True
+            if filtro == "Erros":
+                return "ERRO" in mensagem.upper()
+            if filtro == "Conflitos":
+                return "[CONFLITO]" in mensagem
+            if filtro == "Duplicatas":
+                return "duplicat" in mensagem.lower()
+            return "[SIMULAÇÃO:" in mensagem or " -> " in mensagem or " <- " in mensagem
+
         def atualizar():
             self.caixa_log.configure(state="normal")
-            self.caixa_log.insert("end", mensagem + "\n")
+            self.caixa_log.delete("1.0", "end")
+            for mensagem in self._historico_log:
+                if deve_exibir(mensagem):
+                    self.caixa_log.insert("end", mensagem + "\n")
             self.caixa_log.see("end")
             self.caixa_log.configure(state="disabled")
-        self.after(0, atualizar)
+        atualizar()
+
+    def _atualizar_filtro_log(self, _evento=None):
+        self._atualizar_caixa_log()
 
     def _progresso(self, atual, total, segundos_restantes):
         def atualizar():
@@ -209,7 +287,7 @@ class App(tk.Tk):
                 )
         self.after(0, atualizar)
 
-    def _iniciar(self):
+    def _iniciar(self, simulacao=False):
         origem = self.pasta_origem.get().strip()
         destino = self.pasta_destino.get().strip()
 
@@ -220,7 +298,7 @@ class App(tk.Tk):
             messagebox.showerror("Erro", "Escolha uma pasta de destino.")
             return
 
-        if self.modo_mover.get():
+        if self.modo_mover.get() and not simulacao:
             confirmar = messagebox.askyesno(
                 "Atenção",
                 "A opção MOVER está ativada. Os arquivos serão retirados da origem permanentemente.\n\nDeseja continuar?"
@@ -230,10 +308,12 @@ class App(tk.Tk):
 
         self._parar_flag = False
         self.botao_iniciar.config(state="disabled")
+        self.botao_simular.config(state="disabled")
         self.botao_parar.config(state="normal")
         self.caixa_log.configure(state="normal")
         self.caixa_log.delete("1.0", "end")
         self.caixa_log.configure(state="disabled")
+        self._historico_log.clear()
         self.barra_progresso["value"] = 0
         self.label_progresso.config(text="Iniciando...")
 
@@ -244,13 +324,14 @@ class App(tk.Tk):
             args=(
                 origem, destino, self.organizar_por_mes.get(),
                 self.separar_por_tipo.get(), self.renomear_arquivos.get(),
-                modo, self.verificar_duplicatas.get(), self.acao_duplicata.get()
+                modo, self.verificar_duplicatas.get(), self.acao_duplicata.get(),
+                simulacao
             ),
             daemon=True,
         )
         self._thread_em_execucao.start()
 
-    def _executar_em_thread(self, origem, destino, por_mes, por_tipo, renomear, modo, duplicatas, acao_dup):
+    def _executar_em_thread(self, origem, destino, por_mes, por_tipo, renomear, modo, duplicatas, acao_dup, simulacao):
         try:
             processar_organizacao(
                 origem, destino, por_mes, por_tipo, renomear, modo, duplicatas, acao_dup,
@@ -258,6 +339,7 @@ class App(tk.Tk):
                 callback_progresso=self._progresso,
                 callback_concluido=lambda stats: self.after(0, self._exibir_relatorio_final, stats),
                 deve_parar=lambda: self._parar_flag,
+                simulacao=simulacao,
             )
         except Exception as e:
             self._log(f"ERRO CRÍTICO: {e}")
@@ -265,6 +347,17 @@ class App(tk.Tk):
             self.after(0, self._finalizar)
 
     def _exibir_relatorio_final(self, stats):
+        self._stats_ultimo_relatorio = stats
+        simulacao = stats.get("simulacao", False)
+        self.label_status_relatorio.config(
+            text=("SIMULAÇÃO: nenhuma alteração foi feita."
+                  if simulacao else "EXECUÇÃO REAL concluída."),
+            fg="#1565c0" if simulacao else "#2e7d32"
+        )
+        self.botao_exportar_plano.config(state="normal")
+        self.tabela_resumo.heading("antes", text="Antes (Origem)")
+        self.tabela_resumo.heading("depois", text="Depois (Previsto)" if simulacao else "Depois (Destino)")
+
         for item in self.tabela_resumo.get_children():
             self.tabela_resumo.delete(item)
 
@@ -272,25 +365,27 @@ class App(tk.Tk):
             "Arquivos Totais",
             str(stats.get("origem_total_arq", 0)),
             str(stats.get("organizados", 0)),
-            f"{stats.get('duplicados', 0)} duplicatas ({stats.get('acao_duplicata', '')})"
+            f"{stats.get('duplicados', 0)} duplicatas; {len(stats.get('conflitos', []))} conflitos"
         ))
         self.tabela_resumo.insert("", "end", values=(
             "Espaço em Disco",
             formatar_bytes(stats.get("origem_total_bytes", 0)),
-            formatar_bytes(stats.get("bytes_organizados", 0)),
-            f"-{formatar_bytes(stats.get('bytes_economizados', 0))} liberados"
+            formatar_bytes(stats.get("espaco_destino_necessario", 0)),
+            (f"{formatar_bytes(stats.get('espaco_destino_necessario', 0))} previstos"
+             if simulacao else f"-{formatar_bytes(stats.get('bytes_economizados', 0))} liberados")
         ))
         self.tabela_resumo.insert("", "end", values=(
             "Fotos / Vídeos",
             "Não categorizados",
             f"{stats.get('fotos', 0)} fotos / {stats.get('videos', 0)} vídeos",
-            "Separados por tipo" if self.separar_por_tipo.get() else "Mesma pasta"
+            "Separados por tipo" if stats.get("separar_por_tipo", False) else "Mesma pasta"
         ))
         self.tabela_resumo.insert("", "end", values=(
             "Estrutura",
             f"{stats.get('origem_qtd_pastas', 0)} pastas de origem",
-            f"{len(stats.get('distribuicao_anos', {}))} anos organizados",
-            "Cronologia estruturada"
+            f"{len(stats.get('distribuicao_anos', {}))} anos previstos" if simulacao
+            else f"{len(stats.get('distribuicao_anos', {}))} anos organizados",
+            f"{len(stats.get('conflitos', []))} conflitos de nome"
         ))
 
         texto_relatorio = gerar_texto_relatorio(stats)
@@ -301,11 +396,47 @@ class App(tk.Tk):
 
         self.notebook.select(self.aba_relatorio)
 
+    def _exportar_plano(self):
+        if not self._stats_ultimo_relatorio:
+            return
+
+        caminho = filedialog.asksaveasfilename(
+            title="Exportar plano de organização",
+            defaultextension=".csv",
+            filetypes=[("Arquivo CSV", "*.csv"), ("Arquivo de texto", "*.txt")]
+        )
+        if not caminho:
+            return
+
+        plano = self._stats_ultimo_relatorio.get("plano_operacoes", [])
+        try:
+            if caminho.lower().endswith(".txt"):
+                with open(caminho, "w", encoding="utf-8") as arquivo:
+                    for item in plano:
+                        arquivo.write(
+                            f"{item.get('acao', '').upper()}: "
+                            f"{item.get('origem', '')} -> {item.get('destino', '')} "
+                            f"[{item.get('status', '')}]\n"
+                        )
+            else:
+                with open(caminho, "w", encoding="utf-8", newline="") as arquivo:
+                    campos = ["acao", "origem", "destino", "status", "conflito"]
+                    escritor = csv.DictWriter(arquivo, fieldnames=campos)
+                    escritor.writeheader()
+                    escritor.writerows({campo: item.get(campo, "") for campo in campos} for item in plano)
+            self._log(f"Plano exportado para: {caminho}")
+        except OSError as erro:
+            messagebox.showerror("Erro", f"Não foi possível exportar o plano:\n{erro}")
+
     def _finalizar(self):
         self.botao_iniciar.config(state="normal")
+        self.botao_simular.config(state="normal")
         self.botao_parar.config(state="disabled")
-        self.label_progresso.config(text="Concluído.")
+        self.label_progresso.config(
+            text="Interrompido." if self._parar_flag else "Concluído."
+        )
 
     def _parar(self):
         self._parar_flag = True
         self.botao_parar.config(state="disabled")
+        self.label_progresso.config(text="Parando...")
